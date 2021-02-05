@@ -1,0 +1,311 @@
+---
+title: "Advanced Statistical Computing - Exam"
+author: "Justin Kraaijenbrink"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+### Name: Justin Kraaijenbrink
+
+### ULCN: s2577984
+
+```{r label = preps, echo=FALSE}
+rm(list=ls()) #clears your workspace
+```
+
+Load packages:
+```{r}
+library(ggplot2)
+library(ggpmisc)
+library(tidyverse)
+library(copula)
+library(gridExtra)
+```
+
+Read in data:
+```{r}
+data <- read.csv("insurance.csv") %>% 
+  select(2:3)
+attach(data)
+```
+
+## Task 1. Dependence in the data
+Correlation:
+```{r}
+rho1 <- cor(PLI, WC)
+rho2 <- cor(PLI[PLI < max(PLI)], WC[PLI < max(PLI)])
+```
+
+Histograms of PLI and WC:
+```{r}
+pdf("images/hists.pdf")
+ggplot(data, aes(x = PLI)) +
+  geom_histogram(aes(fill = "PLI"), binwidth = 1, alpha = 0.5) +
+  geom_histogram(aes(x = WC, fill = "WC"), binwidth = 1, alpha = 0.5) +
+ scale_fill_manual(name = "Business line",
+                        breaks = c("PLI", "WC"),
+                        values = c("PLI" = "navy", "WC" = "orange"))
+dev.off()
+```
+
+Scatterplot (joint distribution):
+```{r}
+pdf("images/joint.pdf")
+hist_top <- ggplot(data, aes(x = PLI)) +
+  geom_histogram(aes(y = ..density..), colour = 'black', fill = 'grey', binwidth = 1) +
+  geom_density(alpha = .2, fill = "blue")
+
+hist_side <- ggplot(data, aes(x = WC)) +
+  geom_histogram(aes(y = ..density..), colour = 'black', fill = 'grey', binwidth = 1) +
+  geom_density(alpha = .2, fill = "blue") +
+  coord_flip()
+
+scatter <- ggplot(data, aes(PLI, WC)) +
+  geom_point() +
+  geom_point(aes(x = max(PLI), y = max(WC)), colour = 'red') +
+  geom_density_2d()
+
+empty <- ggplot() + 
+  geom_point(aes(1, 1), colour="white") +
+  theme(axis.ticks=element_blank(), 
+        panel.background=element_blank(), 
+        axis.text.x=element_blank(), 
+        axis.text.y=element_blank(),           
+        axis.title.x=element_blank(), 
+        axis.title.y=element_blank())
+
+grid.arrange(hist_top, empty, scatter, hist_side, 
+             ncol = 2, widths = c(4, 1), heights = c(1, 4))
+dev.off()
+```
+
+## Tasks 3-5. Maximum Likelihood for estimation of parameters
+```{r}
+loglik <- function(pars, x) -sum(dlnorm(x, pars[1], pars[2], log = TRUE))
+
+loglikJoe <- function(theta, x) -sum(dCopula(x, joeCopula(theta), log = TRUE))
+
+EstimateParams <- function(data) {
+  mu0_1 <- mean(log(data[, 1]))
+  sd0_1 <- sqrt(sum((log(data[, 1]) - mu0_1)**2)/nrow(data))
+  pars_1 <- c(mu0_1, sd0_1)
+
+  mu0_2 <- mean(log(data[, 2]))
+  sd0_2 <- sqrt(sum((log(data[, 2]) - mu0_2)**2)/nrow(data))
+  pars_2 <- c(mu0_2, sd0_2)
+  
+  MLE_1 <- optim(pars_1, loglik, x = data[, 1])
+  MLE_2 <- optim(pars_2, loglik, x = data[, 2])
+  
+  U <- cbind(plnorm(data[, 1], MLE_1$par[1], MLE_1$par[2]),
+             plnorm(data[, 2], MLE_2$par[1], MLE_2$par[2]))
+  
+  theta <- optim(1, loglikJoe, x = U, method = "Brent", 
+                 lower = 1, upper = 10)$par
+
+  params <- c(MLE_1$par, MLE_2$par, theta)
+  
+  return(params)
+}
+
+params <- EstimateParams(data)
+```
+
+# Tasks 6-7. Simulate data
+``` {r}
+SimulateJoint <- function(n, params) {
+  Us <- rCopula(n, joeCopula(params[5]))
+  PLI_hat <- qlnorm(Us[, 1], params[1], params[2])
+  WC_hat <- qlnorm(Us[, 2], params[3], params[4])
+  
+  return(data.frame(X1 = PLI_hat, 
+                    X2 = WC_hat))
+}
+
+n <- nrow(data)
+simdata <- SimulateJoint(n, params)
+
+plotdata <- cbind(simdata, PLI, WC)
+
+pdf("images/simdata.pdf")
+ggplot(plotdata) + 
+  geom_point(aes(x = PLI, y = WC, color = "True"), alpha = 0.5) +
+  geom_point(aes(x = X1, y = X2, color = "Simulated"), alpha = 0.5)
+dev.off()
+```
+
+See how parameters effect simulation:
+```{r}
+simdata_mu1 <- SimulateJoint(n, c(2 * params[1], params[2:5])) 
+simdata_sd1 <- SimulateJoint(n, c(params[1], 2 * params[2], params[3:5]))
+simdata_theta <- SimulateJoint(n, c(params[1:4], 4 * params[5]))
+
+plotdata <- data.frame(simdata_mu1, simdata_sd1, simdata_theta, data)
+
+pdf("images/simparams.pdf")
+ggplot(plotdata) +
+  geom_point(aes(x = X1, y = X2, color = "mu1"), alpha = 0.4) +
+  geom_point(aes(x = X1.1, y = X2.1, color = "sd1"), alpha = 0.4) +
+  geom_point(aes(x = X1.2, y = X2.2, color = "theta"), alpha = 0.3) +
+  geom_point(aes(x = PLI, y = WC, color = "True"), alpha = 0.3)
+dev.off()  
+```
+
+
+## Task 8. Simulation study 
+```{r}
+mu1 <- 1; sigma1 <- 2; mu2 <- 3; sigma2 <- 0.5; theta <- 2
+fixed_params <- c(mu1, sigma1, mu2, sigma2, theta)
+Ns <- c(100, 200, 500, 1000)
+rep <- 100
+
+RMSEs <- matrix(nrow = length(Ns), ncol = length(fixed_params))
+computing_time <- numeric(length(Ns))
+
+for (N in 1:length(Ns)) {
+  computing_time[N] <- system.time({
+    n <- Ns[N]
+    par_est <- matrix(nrow = rep, ncol = length(fixed_params))
+    for(i in 1:rep) {
+      simdata <- SimulateJoint(n, fixed_params) 
+      par_est[i, ] <- EstimateParams(simdata)
+    }
+    
+    RMSEs[N, ] <- apply(par_est, 2, sd) / sqrt(rep)
+    })[3]
+}
+
+RMSEs <- RMSEs %>% 
+  `colnames<-` (c("mu1", "sigma1", "mu2", "sigma2", "theta")) %>% 
+  `rownames<-` (paste0("N = ", Ns)) %>% 
+  as.data.frame
+
+pdf("images/RMSEs.pdf")
+ggplot(RMSEs, aes(x = 1:4)) +
+  geom_line(aes(y = mu1, color = "mu1")) + 
+  geom_line(aes(y = sigma1, color = "sigma1")) +
+  geom_line(aes(y = mu2, color = "mu2")) + 
+  geom_line(aes(y = sigma2, color = "sigma2")) +
+  geom_line(aes(y = theta, color = "theta")) +
+  scale_x_continuous(breaks = 1:4, labels = rownames(RMSEs)) +
+  ylab("RMSE") +
+  xlab("")
+dev.off()
+
+
+pdf("images/computingtimes.pdf", width = 16)
+ggplot(data.frame(t = computing_time, n = Ns, N = as.factor(Ns))) +
+  geom_bar(aes(x = N, y = t/n, fill = N), stat = "identity") + 
+  ylab("Computing time / N") + 
+  theme(axis.title.y = element_text(size = 20),
+        axis.title.x = element_text(size = 20),
+        legend.text = element_text(size = 20),
+        legend.title = element_text(size = 20),
+        legend.position = c(0.9, 0.85))
+dev.off()
+```
+
+## Task 9. Expected pay-out (plain MC)
+```{r}
+CalculateVt <- function(data, t) {
+  V <- rowSums(data) * (rowSums(data) > t)
+  
+  return(V)
+}
+
+MC_plain <- function(N, params, t) {
+  X <- SimulateJoint(N, params)
+  out <- mean(CalculateVt(X, t))
+  
+  return(out)
+}
+
+params <- EstimateParams(data)
+N <- 10^5
+Ts <- seq(100, 200, 10)
+
+Vt_plain <- sapply(Ts, MC_plain, N = N, params = params)
+
+pdf("images/VtplainMC.pdf")
+ggplot(tibble(t = Ts, Vt = Vt_plain), aes(t, Vt)) +
+  geom_point() + 
+  scale_x_continuous(breaks = Ts, labels = Ts) +
+  geom_smooth(method = "loess", formula = "y ~ x") 
+dev.off()
+```
+
+## Task 10. Expected pay-out (importance sampling)
+```{r}
+MC_IS <- function(N, params, Ts) {
+  new_params <- c(params[1] + 1, params[2:5])
+  Y <- SimulateJoint(N, new_params)
+  weights <- dlnorm(Y[, 1], params[1], params[2]) / dlnorm(Y[, 1], new_params[1], new_params[2])
+  
+  Vt_IS <- numeric(length(Ts))
+  
+  for(i in 1:length(Ts)) {
+    t <- Ts[i]
+    Vt_IS[i] <- mean(CalculateVt(Y, t) * weights)
+  }
+  
+  return(Vt_IS)
+}
+
+Vt_IS <- MC_IS(N, params, Ts)
+P <- 40000*exp(-Ts/7)
+
+plotdata <- data.frame(t = Ts, Vt = Vt_IS, P = P)
+
+pdf("images/VtvsP.pdf", width = 10)
+ggplot(plotdata, aes(x = t)) +
+  geom_point(aes(y = Vt, color = "Vt"), na.rm = TRUE) + 
+  geom_line(aes(y = Vt, color = "Vt"), na.rm = TRUE) + 
+  geom_point(aes(y = P, color = "P"), na.rm = TRUE) + 
+  geom_line(aes(y = P, color = "P"), na.rm = TRUE) +
+  scale_x_continuous(breaks = Ts, labels = Ts) +
+  ylim(0, 0.0015) 
+dev.off()
+```
+
+## Task 11. Bootstrap results
+```{r}
+BootstrapIS <- function(B, N, data, Ts) {
+  
+  out <- replicate(B, expr = {
+              b_data <- as.data.frame(data[sample(nrow(data), replace = TRUE), ])
+              params <- EstimateParams(b_data)
+              Vt_b <- MC_IS(N, params, Ts)})
+  
+  return(out)
+}
+
+n <- 648
+N <- 10^5
+B <- 1000
+
+Vt_boot <- BootstrapIS(B, N, data, Ts)
+
+quantiles <- apply(Vt_boot, 1, quantile, c(0.10, 0.90))
+bounds <- rbind(2 * rowMeans(Vt_boot) - quantiles[2, ],
+                2 * rowMeans(Vt_boot) + quantiles[1, ])
+
+plotdata <- data.frame(plotdata,
+                       lower = bounds[1, ],
+                       upper = bounds[2, ])
+
+pdf("images/Vtboot.pdf", width = 10)
+ggplot(plotdata, aes(x = t)) +
+  geom_point(aes(y = Vt, color = "Vt"), na.rm = TRUE) + 
+  geom_line(aes(y = Vt, color = "Vt"), na.rm = TRUE) + 
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = "Vt"), width = 1) +
+  geom_point(aes(y = P, color = "P"), na.rm = TRUE) + 
+  geom_line(aes(y = P, color = "P"), na.rm = TRUE) +
+  scale_x_continuous(breaks = Ts, labels = Ts) +
+  ylim(-1e-5, 0.0017)
+dev.off()
+```
+
+```{r}
+save.image()
+```
+
